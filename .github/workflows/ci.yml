@@ -1,0 +1,87 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/test_db
+      SECRET_KEY: ci-test-secret-key-not-for-production
+      DEBUG: 'True'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: ./backend
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        working-directory: ./backend
+        run: python manage.py test api.tests --verbosity=2 --no-input
+
+      - name: Check for secrets in code
+        run: |
+          ! grep -rn --include="*.py" --include="*.js" "password\s*=\s*['\"]" . \
+            --exclude-dir=venv --exclude-dir=node_modules --exclude-dir=.git \
+            | grep -v "test\|example\|placeholder\|getenv\|environ\|validated_data\|set_password" \
+            || true
+
+  frontend-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: ./frontend
+        run: npm run build
+
+      - name: Check no alert/prompt/confirm
+        working-directory: ./frontend
+        run: |
+          FOUND=$(grep -rn "alert(\|prompt(\|window\.confirm(" src/ --include="*.js" \
+            | grep -v "Toast\|ConfirmModal\|// " | wc -l)
+          if [ "$FOUND" -gt "0" ]; then
+            echo "ERROR: Found alert()/prompt()/confirm() calls!"
+            grep -rn "alert(\|prompt(\|window\.confirm(" src/ --include="*.js" | grep -v "Toast\|ConfirmModal\|// "
+            exit 1
+          fi
+          echo "No alert()/prompt()/confirm() found — clean!"
