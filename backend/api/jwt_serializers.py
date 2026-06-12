@@ -63,7 +63,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 ip = None
                 ua = ''
                 if request:
-                    ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR'))
+                    ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
+                    if ip and ',' in ip:
+                        ip = ip.split(',')[0].strip()
                     ua = request.META.get('HTTP_USER_AGENT', '')
 
                 SystemLog.objects.create(
@@ -138,7 +140,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         ip = None
         ua = ''
         if request:
-            ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR'))
+            ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
+            if ip and ',' in ip:
+                ip = ip.split(',')[0].strip()
             ua = request.META.get('HTTP_USER_AGENT', '')
 
         SystemLog.objects.create(

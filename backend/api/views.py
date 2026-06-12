@@ -110,7 +110,9 @@ class TransaccionViewSet(
     @transaction.atomic
     def perform_create(self, serializer):
         """Crear transacción con IP, user_agent, validación de stock y detección de anomalías"""
-        ip = self.request.META.get('HTTP_X_FORWARDED_FOR', self.request.META.get('REMOTE_ADDR'))
+        ip = self.request.META.get('HTTP_X_FORWARDED_FOR', self.request.META.get('REMOTE_ADDR', ''))
+        if ip and ',' in ip:
+            ip = ip.split(',')[0].strip()
         ua = self.request.META.get('HTTP_USER_AGENT', '')
 
         # Forzar usuario autenticado (previene suplantación)
