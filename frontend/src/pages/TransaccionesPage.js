@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../services/api';
 import { useOffline } from '../hooks/useOffline';
 import SignatureModal from '../components/SignatureModal';
+import ScannerGS1 from '../components/ScannerGS1';
+import { parsearGS1 } from '../utils/gs1';
 import {
   Trash2, AlertTriangle, ArrowRightLeft,
-  RotateCcw, Pill, Camera, CheckCircle, Hash, PenLine
+  RotateCcw, Pill, Camera, CheckCircle, Hash, PenLine, PackagePlus, ScanLine
 } from 'lucide-react';
 
 const TransaccionesPage = ({ user }) => {
@@ -20,9 +23,16 @@ const TransaccionesPage = ({ user }) => {
 
   const [formData, setFormData] = useState({
     caja_origen: '', caja_destino: '', medicamento: '', cantidad: 1,
-    lote: '', testigo: '', motivo: '', ubicacion: '', paciente_id: '',
+    lote: '', fecha_caducidad: '', testigo: '', motivo: '', ubicacion: '', paciente_id: '',
   });
   const [evidencia, setEvidencia] = useState([]);
+
+  // Escaner GS1 DataMatrix
+  const [showScanner, setShowScanner] = useState(false);
+  const [scanInfo, setScanInfo] = useState({ status: '', mensaje: '' });
+
+  // ADMIN: acceso al formulario de Recepcion/Compra desde el historial
+  const [adminRecepcion, setAdminRecepcion] = useState(false);
 
   // Signatures
   const [signatureModal, setSignatureModal] = useState({ open: false, key: '', title: '' });
@@ -33,6 +43,7 @@ const TransaccionesPage = ({ user }) => {
 
   const tabs = [
     { id: 'ADMINISTRATION', label: 'Administracion', icon: Pill },
+    { id: 'RECEIPT', label: 'Recepcion/Compra', icon: PackagePlus },
     { id: 'WASTE', label: 'Descarte', icon: Trash2 },
     { id: 'TRANSFER', label: 'Transferencia', icon: ArrowRightLeft },
     { id: 'RETURN', label: 'Devolucion', icon: RotateCcw },
@@ -58,10 +69,54 @@ const TransaccionesPage = ({ user }) => {
   };
 
   const resetForm = () => {
-    setFormData({ caja_origen: '', caja_destino: '', medicamento: '', cantidad: 1, lote: '', testigo: '', motivo: '', ubicacion: '', paciente_id: '' });
+    setFormData({ caja_origen: '', caja_destino: '', medicamento: '', cantidad: 1, lote: '', fecha_caducidad: '', testigo: '', motivo: '', ubicacion: '', paciente_id: '' });
     setEvidencia([]);
     setSignatures({ firma_usuario: null, firma_testigo: null });
     setFormError('');
+    setShowScanner(false);
+    setScanInfo({ status: '', mensaje: '' });
+  };
+
+  const handleScan = (texto) => {
+    const r = parsearGS1(texto);
+
+    if (!r.esGS1) {
+      // Codigo de barras simple: igualar contra codigo_barras del catalogo
+      const med = medicamentos.find(m => m.codigo_barras && m.codigo_barras === r.crudo);
+      if (med) {
+        setFormData(prev => ({ ...prev, medicamento: String(med.id) }));
+        setScanInfo({ status: 'ok', mensaje: `Escaneado: ${med.nombre} (codigo de barras). El lote y la fecha deben ingresarse manualmente.` });
+        setShowScanner(false);
+      } else {
+        setScanInfo({ status: 'warn', mensaje: `El codigo leido no coincide con ningun medicamento del catalogo.` });
+      }
+      return;
+    }
+
+    // GS1: buscar el medicamento por NDC (las 3 normalizaciones posibles)
+    const med = r.candidatosNdc.length
+      ? medicamentos.find(m => m.ndc && r.candidatosNdc.includes(m.ndc))
+      : null;
+
+    const partes = [];
+    if (r.lote) partes.push(`Lote: ${r.lote}`);
+    if (r.fechaCaducidad) partes.push(`Vence: ${r.fechaCaducidad}`);
+
+    setFormData(prev => ({
+      ...prev,
+      medicamento: med ? String(med.id) : prev.medicamento,
+      lote: r.lote || prev.lote,
+      fecha_caducidad: (activeTab === 'RECEIPT' && r.fechaCaducidad) ? r.fechaCaducidad : prev.fecha_caducidad,
+    }));
+
+    if (med) {
+      setScanInfo({ status: 'ok', mensaje: `Escaneado: ${med.nombre} (NDC ${med.ndc_formateado || med.ndc})${partes.length ? ' · ' + partes.join(' · ') : ''}` });
+    } else if (r.ndc10) {
+      setScanInfo({ status: 'warn', mensaje: `El NDC escaneado (${r.ndc10}) no esta en el catalogo. Un administrador debe registrar el medicamento primero.${partes.length ? ' Datos leidos — ' + partes.join(' · ') : ''}` });
+    } else {
+      setScanInfo({ status: 'warn', mensaje: `Codigo GS1 leido sin NDC reconocible.${partes.length ? ' Datos leidos — ' + partes.join(' · ') : ''}` });
+    }
+    setShowScanner(false);
   };
 
   const handleSubmit = async (e) => {
@@ -76,6 +131,7 @@ const TransaccionesPage = ({ user }) => {
       caja_origen: formData.caja_origen ? parseInt(formData.caja_origen) : null,
       caja_destino: formData.caja_destino ? parseInt(formData.caja_destino) : null,
       testigo: formData.testigo ? parseInt(formData.testigo) : null,
+      fecha_caducidad: formData.fecha_caducidad || null,
       evidencia_urls: evidencia,
     };
     try {
@@ -107,9 +163,12 @@ const TransaccionesPage = ({ user }) => {
 
   const selectedMed = medicamentos.find(m => m.id === parseInt(formData.medicamento));
   const requiereTestigo = activeTab === 'WASTE' || selectedMed?.tipo === 'NARCOTICO' || selectedMed?.requiere_doble_factor;
+  const esControlado = selectedMed?.tipo === 'NARCOTICO' || selectedMed?.tipo === 'CONTROLADO';
+  const recepcionControlada = activeTab === 'RECEIPT' && esControlado;
 
   const tipoColors = {
     ADMINISTRATION: 'bg-blue-100 text-blue-800',
+    RECEIPT: 'bg-teal-100 text-teal-800',
     WASTE: 'bg-red-100 text-red-800',
     TRANSFER: 'bg-purple-100 text-purple-800',
     RETURN: 'bg-emerald-100 text-emerald-800',
@@ -142,13 +201,21 @@ const TransaccionesPage = ({ user }) => {
     );
   };
 
-  // ─── ADMIN: solo historial ───
-  if (user?.rol === 'ADMIN') {
+  // ─── ADMIN: historial + acceso a Recepcion/Compra ───
+  if (user?.rol === 'ADMIN' && !adminRecepcion) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Historial de Transacciones</h1>
-          <p className="text-gray-500 mt-1">Registro completo de movimientos de medicamentos</p>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Historial de Transacciones</h1>
+            <p className="text-gray-500 mt-1">Registro completo de movimientos de medicamentos</p>
+          </div>
+          <button
+            onClick={() => { setAdminRecepcion(true); setActiveTab('RECEIPT'); resetForm(); }}
+            className="btn-primary flex items-center gap-2 text-sm">
+            <PackagePlus className="h-4 w-4" />
+            Registrar Recepcion/Compra
+          </button>
         </div>
 
         {/* Filter tabs */}
@@ -212,17 +279,26 @@ const TransaccionesPage = ({ user }) => {
     );
   }
 
-  // ─── PARAMEDICO: formulario completo + historial ───
+  // ─── PARAMEDICO: formulario completo + historial (ADMIN: solo Recepcion/Compra) ───
+  const tabsVisibles = user?.rol === 'ADMIN' ? tabs.filter(t => t.id === 'RECEIPT') : tabs;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Transacciones</h1>
-        <p className="text-gray-500 mt-1">Registro de movimientos de medicamentos</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{user?.rol === 'ADMIN' ? 'Recepcion / Compra' : 'Transacciones'}</h1>
+          <p className="text-gray-500 mt-1">{user?.rol === 'ADMIN' ? 'Registro de entrada de medicamentos comprados' : 'Registro de movimientos de medicamentos'}</p>
+        </div>
+        {user?.rol === 'ADMIN' && (
+          <button onClick={() => { setAdminRecepcion(false); setActiveTab(''); resetForm(); }} className="btn-secondary text-sm">
+            ← Volver al historial
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">
-        {tabs.map((tab) => {
+        {tabsVisibles.map((tab) => {
           const Icon = tab.icon;
           return (
             <button key={tab.id} onClick={() => { setActiveTab(tab.id); resetForm(); }}
@@ -255,6 +331,16 @@ const TransaccionesPage = ({ user }) => {
             </div>
           )}
 
+          {activeTab === 'WASTE' && (
+            <div className="p-3 rounded-xl bg-blue-50 border border-blue-100 text-sm text-blue-900 mb-4">
+              Este proceso sigue el{' '}
+              <Link to="/protocolos" className="font-semibold underline hover:text-blue-700">
+                Protocolo de Eliminacion de Medicamentos Controlados
+              </Link>{' '}
+              (sistema Deterra · dos personas autorizadas · doble firma).
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             {user?.rol === 'PARAMEDICO' && (
               <div>
@@ -263,7 +349,14 @@ const TransaccionesPage = ({ user }) => {
               </div>
             )}
             <div>
-              <label className="input-label">Medicamento *</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="input-label mb-0">Medicamento *</label>
+                <button type="button" onClick={() => { setShowScanner(!showScanner); setScanInfo({ status: '', mensaje: '' }); }}
+                  className="flex items-center gap-1.5 text-xs font-medium text-blue-900 hover:text-blue-700 transition-colors">
+                  <ScanLine className="h-3.5 w-3.5" />
+                  {showScanner ? 'Cerrar escaner' : 'Escanear empaque'}
+                </button>
+              </div>
               <select className="input-field" value={formData.medicamento} onChange={(e) => setFormData({...formData, medicamento: e.target.value})} required>
                 <option value="">Seleccionar...</option>
                 {medicamentos.map((med) => (
@@ -272,16 +365,44 @@ const TransaccionesPage = ({ user }) => {
               </select>
             </div>
 
+            {showScanner && (
+              <ScannerGS1 onScan={handleScan} onClose={() => setShowScanner(false)} />
+            )}
+
+            {scanInfo.mensaje && (
+              <div className={`p-3 rounded-xl border text-sm ${scanInfo.status === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                {scanInfo.mensaje}
+              </div>
+            )}
+
+            {activeTab === 'RECEIPT' && selectedMed && (
+              <div className={`p-3 rounded-xl border text-sm ${selectedMed.ndc ? 'bg-teal-50 border-teal-200 text-teal-800' : esControlado ? 'bg-red-50 border-red-200 text-red-700' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+                {selectedMed.ndc
+                  ? <>NDC: <span className="font-mono font-semibold">{selectedMed.ndc_formateado || selectedMed.ndc}</span>{selectedMed.dea_schedule && ` · Schedule ${selectedMed.dea_schedule}`}</>
+                  : esControlado
+                    ? 'Este medicamento no tiene NDC registrado. Un administrador debe agregarlo en el catalogo antes de poder recibirlo.'
+                    : 'Sin NDC registrado (no requerido para medicamentos generales).'}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="input-label">Cantidad *</label>
                 <input type="number" min="1" className="input-field" value={formData.cantidad} onChange={(e) => setFormData({...formData, cantidad: e.target.value})} required />
               </div>
               <div>
-                <label className="input-label">Lote</label>
-                <input type="text" className="input-field" value={formData.lote} onChange={(e) => setFormData({...formData, lote: e.target.value})} />
+                <label className="input-label">Lote {recepcionControlada && <span className="text-red-600">*</span>}</label>
+                <input type="text" className="input-field" value={formData.lote} onChange={(e) => setFormData({...formData, lote: e.target.value})} required={recepcionControlada} placeholder={activeTab === 'RECEIPT' ? 'Como aparece en el empaque' : ''} />
               </div>
             </div>
+
+            {activeTab === 'RECEIPT' && (
+              <div>
+                <label className="input-label">Fecha de expiracion {recepcionControlada && <span className="text-red-600">*</span>}</label>
+                <input type="date" className="input-field" value={formData.fecha_caducidad} onChange={(e) => setFormData({...formData, fecha_caducidad: e.target.value})} required={recepcionControlada} min={new Date(Date.now() + 86400000).toISOString().split('T')[0]} />
+                {recepcionControlada && <p className="text-xs text-amber-600 mt-1.5">NDC + lote + fecha de expiracion son obligatorios al recibir narcoticos y controlados.</p>}
+              </div>
+            )}
 
             {['ADMINISTRATION','WASTE','DAMAGE','TRANSFER'].includes(activeTab) && (
               <div>
@@ -293,7 +414,7 @@ const TransaccionesPage = ({ user }) => {
               </div>
             )}
 
-            {['PICKUP','RETURN','TRANSFER'].includes(activeTab) && (
+            {['RECEIPT','PICKUP','RETURN','TRANSFER'].includes(activeTab) && (
               <div>
                 <label className="input-label">Caja Destino *</label>
                 <select className="input-field" value={formData.caja_destino} onChange={(e) => setFormData({...formData, caja_destino: e.target.value})} required>
@@ -358,7 +479,7 @@ const TransaccionesPage = ({ user }) => {
             <SignaturePreview sigKey="firma_usuario" label="Firma Digital" required />
 
             <button type="submit"
-              disabled={loading || !signatures.firma_usuario || (requiereTestigo && activeTab === 'WASTE' && !formData.testigo)}
+              disabled={loading || !signatures.firma_usuario || (requiereTestigo && activeTab === 'WASTE' && !formData.testigo) || (recepcionControlada && !selectedMed?.ndc)}
               className="w-full btn-primary disabled:opacity-40 py-3">
               {loading ? 'Registrando...' : isOnline ? 'Registrar Transaccion' : 'Guardar Localmente'}
             </button>

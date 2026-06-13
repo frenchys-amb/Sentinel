@@ -1,6 +1,5 @@
 import React from 'react';
 import DashboardSemaforo from '../components/DashboardSemaforo';
-import BotonEmergencia from '../components/BotonEmergencia';
 import { MapPin, BadgeCheck } from 'lucide-react';
 
 const DashboardPage = ({ user }) => {
@@ -24,7 +23,6 @@ const DashboardPage = ({ user }) => {
       </div>
 
       <DashboardSemaforo />
-      <BotonEmergencia user={user} />
     </div>
   );
 };

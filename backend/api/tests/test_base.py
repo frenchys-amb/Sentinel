@@ -69,11 +69,13 @@ class BaseAPITestCase(TestCase):
             nombre='Fentanyl', principio_activo='Fentanilo',
             concentracion='50 mcg/mL', presentacion='Ampolla 2mL',
             tipo='NARCOTICO', requiere_doble_factor=True, activo=True,
+            ndc='00409909432', dea_schedule='II',
         )
         cls.controlado = Medicamento.objects.create(
             nombre='Midazolam', principio_activo='Midazolam',
             concentracion='5 mg/mL', presentacion='Ampolla 3mL',
             tipo='CONTROLADO', activo=True,
+            ndc='00409230102', dea_schedule='IV',
         )
         cls.general = Medicamento.objects.create(
             nombre='Paracetamol', principio_activo='Acetaminofen',

@@ -280,12 +280,13 @@ const ReportesPage = ({ user }) => {
           {caducidades.length > 0 && (
             <div className="overflow-x-auto -mx-6"><div className="px-6">
               <table className="table-pro">
-                <thead><tr><th>Medicamento</th><th>Tipo</th><th>Lote</th><th>Caja</th><th>Unidad</th><th className="text-right">Cant.</th><th>Vencimiento</th><th className="text-right">Dias</th></tr></thead>
+                <thead><tr><th>Medicamento</th><th>Tipo</th><th>NDC</th><th>Lote</th><th>Caja</th><th>Unidad</th><th className="text-right">Cant.</th><th>Vencimiento</th><th className="text-right">Dias</th></tr></thead>
                 <tbody>
                   {caducidades.map((item, idx) => (
                     <tr key={idx}>
                       <td className="font-medium text-gray-900">{item.medicamento}</td>
                       <td><span className={`badge text-[10px] ${item.tipo === 'NARCOTICO' ? 'bg-red-100 text-red-800' : item.tipo === 'CONTROLADO' ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-700'}`}>{item.tipo || '—'}</span></td>
+                      <td className="text-gray-600 font-mono text-xs">{item.ndc || '—'}</td>
                       <td className="text-gray-600">{item.lote}</td>
                       <td className="text-gray-600">{item.caja}</td>
                       <td className="text-gray-600">{item.unidad || '—'}</td>

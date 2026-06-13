@@ -16,6 +16,7 @@ urlpatterns = [
     path('api/unidades/', include('api.unidad_urls')),
     path('api/bases/', include('api.base_urls')),
     path('api/turnos-config/', include('api.turnoconfig_urls')),
+    path('api/protocolos/', include('api.protocolo_urls')),
 ]
 
 if settings.DEBUG:

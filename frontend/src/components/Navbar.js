@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, AlertTriangle, FileText, LogOut,
-  Wifi, WifiOff, ShieldCheck, ClipboardCheck, Link2, FileSearch
+  Wifi, WifiOff, ShieldCheck, ClipboardCheck, Link2, FileSearch, BookOpen
 } from 'lucide-react';
 import { useOffline } from '../hooks/useOffline';
 
@@ -17,6 +17,7 @@ const Navbar = ({ user, onLogout }) => {
     { path: '/transacciones', label: 'Transacciones', icon: Package, roles: ['ADMIN', 'PARAMEDICO', 'AUDITOR'] },
     { path: '/alertas', label: 'Alertas', icon: AlertTriangle, roles: ['ADMIN', 'AUDITOR'] },
     { path: '/reportes', label: 'Reportes', icon: FileText, roles: ['ADMIN', 'AUDITOR'] },
+    { path: '/protocolos', label: 'Protocolos', icon: BookOpen, roles: ['ADMIN', 'PARAMEDICO', 'AUDITOR'] },
   ];
 
   const navItems = allNavItems.filter(item => item.roles.includes(user?.rol));

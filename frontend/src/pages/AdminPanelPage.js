@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import ConfirmModal from '../components/ConfirmModal';
+import ScannerGS1 from '../components/ScannerGS1';
+import { parsearGS1 } from '../utils/gs1';
 import {
   Users, Package, Compass, Pill, Plus, Edit2, Check, X,
-  AlertCircle, ShieldCheck, Trash2, Power, Eye, EyeOff, Lock, Unlock, Clock, Building2
+  AlertCircle, ShieldCheck, Trash2, Power, Eye, EyeOff, Lock, Unlock, Clock, Building2, ScanLine
 } from 'lucide-react';
 
 const AdminPanelPage = ({ user }) => {
@@ -25,7 +27,9 @@ const AdminPanelPage = ({ user }) => {
   const [userForm, setUserForm] = useState({ username: '', first_name: '', last_name: '', email: '', password: '', rol: 'PARAMEDICO', numero_licencia: '', fecha_vencimiento_licencia: '', telefono: '', activo: true });
   const [boxForm, setBoxForm] = useState({ codigo: '', nombre: '', ubicacion: '', unidad: '', estado: 'ACTIVA', base: '' });
   const [unitForm, setUnitForm] = useState({ nombre: '', descripcion: '', activa: true });
-  const [medForm, setMedForm] = useState({ nombre: '', principio_activo: '', concentracion: '', presentacion: '', tipo: 'GENERAL', codigo_barras: '', requiere_doble_factor: false, temperatura_conservacion: '', activo: true });
+  const [medForm, setMedForm] = useState({ nombre: '', principio_activo: '', concentracion: '', presentacion: '', tipo: 'GENERAL', ndc: '', dea_schedule: '', codigo_barras: '', requiere_doble_factor: false, temperatura_conservacion: '', activo: true });
+  const [ndcCheck, setNdcCheck] = useState({ status: '', mensaje: '' });
+  const [showMedScanner, setShowMedScanner] = useState(false);
   const [turnosList, setTurnosList] = useState([]);
   const [turnoForm, setTurnoForm] = useState({ nombre: '', hora_inicio: '07:00', hora_fin: '19:00' });
   const [basesList, setBasesList] = useState([]);
@@ -70,9 +74,11 @@ const AdminPanelPage = ({ user }) => {
     setUserForm({ username: '', first_name: '', last_name: '', email: '', password: '', rol: 'PARAMEDICO', numero_licencia: '', fecha_vencimiento_licencia: '', telefono: '', activo: true });
     setBoxForm({ codigo: '', nombre: '', ubicacion: '', unidad: '', estado: 'ACTIVA', base: '' });
     setUnitForm({ nombre: '', descripcion: '', activa: true });
-    setMedForm({ nombre: '', principio_activo: '', concentracion: '', presentacion: '', tipo: 'GENERAL', codigo_barras: '', requiere_doble_factor: false, temperatura_conservacion: '', activo: true });
+    setMedForm({ nombre: '', principio_activo: '', concentracion: '', presentacion: '', tipo: 'GENERAL', ndc: '', dea_schedule: '', codigo_barras: '', requiere_doble_factor: false, temperatura_conservacion: '', activo: true });
     setTurnoForm({ nombre: '', hora_inicio: '07:00', hora_fin: '19:00' });
     setBaseForm({ nombre: '', direccion: '', descripcion: '' });
+    setNdcCheck({ status: '', mensaje: '' });
+    setShowMedScanner(false);
     setError(''); setSuccess(''); setShowPassword(false);
   };
 
@@ -135,7 +141,7 @@ const AdminPanelPage = ({ user }) => {
   const handleMedSubmit = async (e) => {
     e.preventDefault(); setLoading(true); setError(''); setSuccess('');
     try {
-      const payload = { ...medForm, codigo_barras: medForm.codigo_barras || null, requiere_doble_factor: medForm.tipo === 'NARCOTICO' ? true : medForm.requiere_doble_factor };
+      const payload = { ...medForm, ndc: medForm.ndc || null, codigo_barras: medForm.codigo_barras || null, requiere_doble_factor: medForm.tipo === 'NARCOTICO' ? true : medForm.requiere_doble_factor };
       if (editingId) { await api.put(`/medicamentos/medicamentos/${editingId}/`, payload); setSuccess('Medicamento actualizado'); }
       else { await api.post('/medicamentos/medicamentos/', payload); setSuccess('Medicamento creado'); }
       closeModal(); fetchData();
@@ -143,9 +149,74 @@ const AdminPanelPage = ({ user }) => {
     finally { setLoading(false); }
   };
 
+  // Autocompletar solo los campos vacíos — no pisar lo que el admin ya escribió
+  const aplicarResultadoFda = (d, prefijo = 'Verificado FDA') => {
+    setMedForm(prev => ({
+      ...prev,
+      ndc: d.ndc_formateado || prev.ndc,
+      nombre: prev.nombre || d.nombre,
+      principio_activo: prev.principio_activo || d.principio_activo,
+      concentracion: prev.concentracion || d.concentracion,
+      presentacion: prev.presentacion || d.presentacion,
+      dea_schedule: d.dea_schedule || prev.dea_schedule,
+      tipo: prev.tipo === 'GENERAL' ? d.tipo_sugerido : prev.tipo,
+      requiere_doble_factor: d.tipo_sugerido === 'NARCOTICO' ? true : prev.requiere_doble_factor,
+    }));
+    setNdcCheck({ status: 'found', mensaje: `${prefijo}: ${d.nombre} — ${d.fabricante}${d.dea_schedule ? ` (Schedule ${d.dea_schedule})` : ''}` });
+  };
+
+  const handleVerifyNdc = async () => {
+    if (!medForm.ndc) return;
+    setNdcCheck({ status: 'loading', mensaje: 'Consultando el directorio de la FDA...' });
+    try {
+      const res = await api.get('/medicamentos/medicamentos/ndc-lookup/', { params: { ndc: medForm.ndc } });
+      const d = res.data;
+      if (d.encontrado) {
+        aplicarResultadoFda(d);
+      } else {
+        setNdcCheck({ status: 'notfound', mensaje: d.mensaje });
+      }
+    } catch (err) {
+      const d = err.response?.data;
+      if (err.response?.status === 503) {
+        setNdcCheck({ status: 'offline', mensaje: d?.mensaje || 'Directorio FDA no disponible. El NDC puede registrarse y verificarse despues.' });
+      } else {
+        setNdcCheck({ status: 'invalid', mensaje: d?.ndc || 'No se pudo verificar el NDC.' });
+      }
+    }
+  };
+
+  const handleMedScan = async (texto) => {
+    const r = parsearGS1(texto);
+    setShowMedScanner(false);
+    if (!r.esGS1 || !r.candidatosNdc?.length) {
+      setNdcCheck({ status: 'invalid', mensaje: 'El codigo escaneado no contiene un NDC. Usa el DataMatrix del empaque del medicamento.' });
+      return;
+    }
+    setNdcCheck({ status: 'loading', mensaje: 'NDC escaneado — consultando el directorio de la FDA...' });
+    // El NDC del GTIN tiene 3 normalizaciones posibles: probar hasta dar con la registrada en FDA
+    for (const candidato of r.candidatosNdc) {
+      try {
+        const res = await api.get('/medicamentos/medicamentos/ndc-lookup/', { params: { ndc: candidato } });
+        if (res.data.encontrado) {
+          aplicarResultadoFda(res.data, 'Escaneado y verificado FDA');
+          return;
+        }
+      } catch (err) {
+        if (err.response?.status === 503) {
+          setMedForm(prev => ({ ...prev, ndc: candidato }));
+          setNdcCheck({ status: 'offline', mensaje: 'NDC escaneado, pero el directorio FDA no esta disponible. Completa los datos manualmente y verifica despues.' });
+          return;
+        }
+      }
+    }
+    setMedForm(prev => ({ ...prev, ndc: r.candidatosNdc[0] }));
+    setNdcCheck({ status: 'notfound', mensaje: 'El NDC escaneado no aparece en el directorio de la FDA. Revisa el numero impreso en el empaque.' });
+  };
+
   const handleEditMed = (med) => {
     setEditingId(med.id);
-    setMedForm({ nombre: med.nombre || '', principio_activo: med.principio_activo || '', concentracion: med.concentracion || '', presentacion: med.presentacion || '', tipo: med.tipo || 'GENERAL', codigo_barras: med.codigo_barras || '', requiere_doble_factor: med.requiere_doble_factor || false, temperatura_conservacion: med.temperatura_conservacion || '', activo: med.activo });
+    setMedForm({ nombre: med.nombre || '', principio_activo: med.principio_activo || '', concentracion: med.concentracion || '', presentacion: med.presentacion || '', tipo: med.tipo || 'GENERAL', ndc: med.ndc || '', dea_schedule: med.dea_schedule || '', codigo_barras: med.codigo_barras || '', requiere_doble_factor: med.requiere_doble_factor || false, temperatura_conservacion: med.temperatura_conservacion || '', activo: med.activo });
     setShowFormModal(true);
   };
   const handleToggleMedActive = async (med) => { try { await api.patch(`/medicamentos/medicamentos/${med.id}/`, { activo: !med.activo }); setSuccess(`Medicamento ${med.activo ? 'desactivado' : 'activado'}`); fetchData(); } catch { setError('Error'); } };
@@ -310,19 +381,20 @@ const AdminPanelPage = ({ user }) => {
 
             {activeTab === 'meds' && (
               <table className="table-pro">
-                <thead><tr><th>Medicamento</th><th>Tipo</th><th>Presentacion</th><th>Seguridad</th><th className="text-center">Activo</th><th className="text-right">Acciones</th></tr></thead>
+                <thead><tr><th>Medicamento</th><th>Tipo</th><th>NDC</th><th>Presentacion</th><th>Seguridad</th><th className="text-center">Activo</th><th className="text-right">Acciones</th></tr></thead>
                 <tbody>
                   {medsList.map(med => (
                     <tr key={med.id}>
                       <td><div className="font-medium text-gray-900">{med.nombre}</div><div className="text-xs text-gray-500">{med.principio_activo}</div></td>
                       <td><span className={`badge text-[10px] ${med.tipo === 'NARCOTICO' ? 'bg-red-100 text-red-800' : med.tipo === 'CONTROLADO' ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-700'}`}>{med.tipo}</span></td>
+                      <td><div className="text-gray-700 text-sm font-mono">{med.ndc_formateado || '—'}</div>{med.dea_schedule && <div className="text-xs text-gray-500">Schedule {med.dea_schedule}</div>}</td>
                       <td><div className="text-gray-700 text-sm">{med.concentracion}</div><div className="text-xs text-gray-500">{med.presentacion}</div></td>
                       <td><div className="text-gray-700 text-sm">{med.requiere_doble_factor ? 'Testigo req.' : 'Firma simple'}</div></td>
                       <td className="text-center"><button onClick={() => handleToggleMedActive(med)} className={`p-1.5 rounded-lg transition-colors ${med.activo ? 'text-emerald-600 hover:bg-emerald-50' : 'text-gray-400 hover:bg-gray-100'}`}><Power className="h-4 w-4" /></button></td>
                       <td className="text-right"><button onClick={() => handleEditMed(med)} className="p-1.5 text-blue-900 hover:bg-blue-50 rounded-lg"><Edit2 className="h-4 w-4" /></button></td>
                     </tr>
                   ))}
-                  {medsList.length === 0 && <tr><td colSpan="6" className="text-center text-gray-400 py-12">No hay medicamentos</td></tr>}
+                  {medsList.length === 0 && <tr><td colSpan="7" className="text-center text-gray-400 py-12">No hay medicamentos</td></tr>}
                 </tbody>
               </table>
             )}
@@ -467,6 +539,14 @@ const AdminPanelPage = ({ user }) => {
               {/* Meds Form */}
               {activeTab === 'meds' && (
                 <form onSubmit={handleMedSubmit} className="space-y-4">
+                  <button type="button" onClick={() => { setShowMedScanner(!showMedScanner); setNdcCheck({ status: '', mensaje: '' }); }}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 border-2 border-dashed border-blue-300 rounded-xl text-sm font-medium text-blue-900 hover:border-blue-500 hover:bg-blue-50 transition-colors">
+                    <ScanLine className="h-4 w-4" />
+                    {showMedScanner ? 'Cerrar escaner' : 'Escanear empaque — llena NDC y datos del medicamento'}
+                  </button>
+                  {showMedScanner && (
+                    <ScannerGS1 onScan={handleMedScan} onClose={() => setShowMedScanner(false)} titulo="Escanear DataMatrix del empaque" />
+                  )}
                   <div className="grid grid-cols-2 gap-4">
                     <div><label className="input-label">Nombre *</label><input type="text" required className="input-field" value={medForm.nombre} onChange={e => setMedForm({...medForm, nombre: e.target.value})} placeholder="Fentanyl" /></div>
                     <div><label className="input-label">Principio activo *</label><input type="text" required className="input-field" value={medForm.principio_activo} onChange={e => setMedForm({...medForm, principio_activo: e.target.value})} /></div>
@@ -479,6 +559,39 @@ const AdminPanelPage = ({ user }) => {
                     <div><label className="input-label">Tipo *</label><select className="input-field" value={medForm.tipo} onChange={e => { const t = e.target.value; setMedForm({...medForm, tipo: t, requiere_doble_factor: t === 'NARCOTICO' ? true : medForm.requiere_doble_factor}); }}><option value="GENERAL">General</option><option value="CONTROLADO">Controlado</option><option value="NARCOTICO">Narcotico</option></select></div>
                     <div><label className="input-label">Codigo barras</label><input type="text" className="input-field" value={medForm.codigo_barras} onChange={e => setMedForm({...medForm, codigo_barras: e.target.value})} /></div>
                   </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="input-label">NDC {(medForm.tipo === 'NARCOTICO' || medForm.tipo === 'CONTROLADO') && <span className="text-red-600">*</span>}</label>
+                      <div className="flex gap-2">
+                        <input type="text" required={medForm.tipo === 'NARCOTICO' || medForm.tipo === 'CONTROLADO'} className="input-field flex-1" value={medForm.ndc} onChange={e => { setMedForm({...medForm, ndc: e.target.value}); setNdcCheck({ status: '', mensaje: '' }); }} placeholder="0409-1276-32" />
+                        <button type="button" onClick={handleVerifyNdc} disabled={!medForm.ndc || ndcCheck.status === 'loading'} className="btn-secondary px-3 whitespace-nowrap disabled:opacity-40 flex items-center gap-1.5">
+                          <ShieldCheck className="h-4 w-4" />
+                          {ndcCheck.status === 'loading' ? 'Verificando...' : 'Verificar'}
+                        </button>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">Como aparece en el empaque (4-4-2, 5-3-2 o 5-4-1)</p>
+                    </div>
+                    <div>
+                      <label className="input-label">Schedule DEA</label>
+                      <select className="input-field" value={medForm.dea_schedule} onChange={e => setMedForm({...medForm, dea_schedule: e.target.value})}>
+                        <option value="">N/A</option>
+                        <option value="II">Schedule II</option>
+                        <option value="III">Schedule III</option>
+                        <option value="IV">Schedule IV</option>
+                        <option value="V">Schedule V</option>
+                      </select>
+                    </div>
+                  </div>
+                  {ndcCheck.mensaje && ndcCheck.status !== 'loading' && (
+                    <div className={`p-3 rounded-xl border text-sm ${
+                      ndcCheck.status === 'found' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
+                      ndcCheck.status === 'notfound' ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                      ndcCheck.status === 'offline' ? 'bg-gray-50 border-gray-200 text-gray-600' :
+                      'bg-red-50 border-red-200 text-red-700'
+                    }`}>
+                      {ndcCheck.mensaje}
+                    </div>
+                  )}
                   <div><label className="input-label">Temperatura</label><input type="text" className="input-field" value={medForm.temperatura_conservacion} onChange={e => setMedForm({...medForm, temperatura_conservacion: e.target.value})} placeholder="ambiente" /></div>
                   <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
                     <label className="flex items-center gap-2 cursor-pointer">

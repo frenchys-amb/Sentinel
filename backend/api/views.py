@@ -16,15 +16,18 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
+from core.ndc import formatear_ndc
+
 from core.models import (
     Usuario, Caja, Medicamento, Inventario, Transaccion, SystemLog,
-    Alerta, Incidente, Turno, Unidad, CustodiaCaja, Base, TurnoConfig
+    Alerta, Incidente, Turno, Unidad, CustodiaCaja, Base, TurnoConfig,
+    ProtocoloAcuse
 )
 from .serializers import (
     UsuarioSerializer, CajaSerializer, MedicamentoSerializer, InventarioSerializer,
     TransaccionSerializer, SystemLogSerializer, AlertaSerializer, IncidenteSerializer,
     TurnoSerializer, UnidadSerializer, CustodiaCajaSerializer, BaseSerializer,
-    TurnoConfigSerializer
+    TurnoConfigSerializer, ProtocoloAcuseSerializer
 )
 from rest_framework.permissions import BasePermission
 
@@ -172,7 +175,7 @@ class TransaccionViewSet(
                 cantidad=F('cantidad') - transaccion.cantidad
             )
 
-        if transaccion.tipo in ['PICKUP', 'RETURN', 'TRANSFER']:
+        if transaccion.tipo in ['RECEIPT', 'PICKUP', 'RETURN', 'TRANSFER']:
             if not transaccion.caja_destino:
                 raise drf_serializers.ValidationError(
                     {'caja_destino': 'Se requiere caja de destino para este tipo de transacción.'}
@@ -182,11 +185,16 @@ class TransaccionViewSet(
                 caja=transaccion.caja_destino,
                 medicamento=transaccion.medicamento,
                 lote=transaccion.lote,
-                defaults={'cantidad': 0}
+                defaults={'cantidad': 0, 'fecha_caducidad': transaccion.fecha_caducidad}
             )
             Inventario.objects.filter(pk=inv_destino.pk).update(
                 cantidad=F('cantidad') + transaccion.cantidad
             )
+            # Si el lote ya existía sin fecha de expiración, completarla
+            if transaccion.fecha_caducidad and not inv_destino.fecha_caducidad:
+                Inventario.objects.filter(pk=inv_destino.pk).update(
+                    fecha_caducidad=transaccion.fecha_caducidad
+                )
 
     def _actualizar_turno(self, transaccion):
         """Actualiza contadores del turno activo con F() expressions"""
@@ -661,10 +669,11 @@ class ReporteViewSet(viewsets.ViewSet):
             ).select_related('medicamento', 'caja')
             if inv_items.exists():
                 elements.append(Paragraph("INVENTARIO ACTUAL DE NARCÓTICOS", styles['Heading2']))
-                inv_data = [['Medicamento', 'Lote', 'Cantidad', 'Vencimiento', 'Caja']]
+                inv_data = [['Medicamento', 'NDC', 'Lote', 'Cantidad', 'Vencimiento', 'Caja']]
                 for inv in inv_items:
                     inv_data.append([
                         inv.medicamento.nombre,
+                        formatear_ndc(inv.medicamento.ndc) or '-',
                         inv.lote or '-',
                         str(inv.cantidad),
                         str(inv.fecha_caducidad) if inv.fecha_caducidad else '-',
@@ -704,7 +713,7 @@ class ReporteViewSet(viewsets.ViewSet):
             f"TRANSACCIONES DE NARCÓTICOS ({len(transacciones)} registros)", styles['Heading2']
         ))
         if transacciones:
-            tx_data = [['Fecha', 'Hash', 'Tipo', 'Usuario', 'Testigo', 'Medicamento', 'Cant.', 'Lote', 'Paciente']]
+            tx_data = [['Fecha', 'Hash', 'Tipo', 'Usuario', 'Testigo', 'Medicamento', 'NDC', 'Cant.', 'Lote', 'Paciente']]
             for t in transacciones:
                 tx_data.append([
                     t.timestamp.strftime('%Y-%m-%d %H:%M'),
@@ -713,6 +722,7 @@ class ReporteViewSet(viewsets.ViewSet):
                     t.usuario.get_full_name() or t.usuario.username,
                     t.testigo.get_full_name() if t.testigo else '-',
                     t.medicamento.nombre,
+                    formatear_ndc(t.medicamento.ndc) or '-',
                     str(t.cantidad),
                     t.lote or '-',
                     t.paciente_id[:10] if t.paciente_id else '-',
@@ -770,8 +780,8 @@ class ReporteViewSet(viewsets.ViewSet):
         writer = csv.writer(response)
         writer.writerow([
             'ID', 'Hash', 'Fecha', 'Tipo', 'Usuario', 'Testigo',
-            'Medicamento', 'Tipo Med.', 'Cantidad', 'Lote',
-            'Caja Origen', 'Caja Destino', 'Paciente ID', 'Motivo',
+            'Medicamento', 'NDC', 'Tipo Med.', 'Schedule DEA', 'Cantidad', 'Lote',
+            'Fecha Caducidad', 'Caja Origen', 'Caja Destino', 'Paciente ID', 'Motivo',
             'Firma Usuario', 'Firma Testigo',
         ])
 
@@ -784,9 +794,12 @@ class ReporteViewSet(viewsets.ViewSet):
                 t.usuario.get_full_name() or t.usuario.username,
                 t.testigo.get_full_name() if t.testigo else '',
                 t.medicamento.nombre,
+                formatear_ndc(t.medicamento.ndc),
                 t.medicamento.tipo,
+                t.medicamento.dea_schedule,
                 t.cantidad,
                 t.lote,
+                t.fecha_caducidad.isoformat() if t.fecha_caducidad else '',
                 t.caja_origen.codigo if t.caja_origen else '',
                 t.caja_destino.codigo if t.caja_destino else '',
                 t.paciente_id,
@@ -899,6 +912,7 @@ class ReporteViewSet(viewsets.ViewSet):
             data.append({
                 'medicamento': inv.medicamento.nombre,
                 'tipo': inv.medicamento.tipo,
+                'ndc': formatear_ndc(inv.medicamento.ndc),
                 'lote': inv.lote,
                 'caja': inv.caja.codigo,
                 'unidad': inv.caja.unidad,
@@ -1033,6 +1047,46 @@ class MedicamentoViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         med = serializer.save()
         self._log_medicamento_change('Medicamento actualizado', med)
+
+    @action(detail=False, methods=['get'], url_path='ndc-lookup')
+    def ndc_lookup(self, request):
+        """
+        Verifica un NDC contra el FDA NDC Directory (openFDA) y devuelve
+        los datos del producto para autocompletar el catálogo.
+        """
+        from core.fda import FDAServicioNoDisponible, consultar_ndc
+        from core.ndc import NDCInvalido, normalizar_ndc
+
+        valor = request.query_params.get('ndc', '')
+        try:
+            ndc11 = normalizar_ndc(valor)
+        except NDCInvalido as e:
+            return Response({'ndc': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            info = consultar_ndc(ndc11)
+        except FDAServicioNoDisponible:
+            return Response({
+                'encontrado': False,
+                'verificado': False,
+                'ndc': ndc11,
+                'ndc_formateado': formatear_ndc(ndc11),
+                'mensaje': 'El directorio de la FDA no está disponible en este momento. '
+                           'El NDC tiene formato válido y puede registrarse; '
+                           'verifíquelo cuando haya conexión.',
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        if info is None:
+            return Response({
+                'encontrado': False,
+                'verificado': True,
+                'ndc': ndc11,
+                'ndc_formateado': formatear_ndc(ndc11),
+                'mensaje': 'Este NDC no aparece en el directorio de la FDA. '
+                           'Verifique el número en el empaque antes de registrarlo.',
+            })
+
+        return Response(info)
 
     def perform_destroy(self, instance):
         if instance.inventarios.exists() or instance.transacciones.exists():
@@ -1496,3 +1550,44 @@ class TurnoConfigViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), IsSystemAdmin()]
         return [IsAuthenticated()]
+
+
+class ProtocoloAcuseViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
+                            viewsets.GenericViewSet):
+    """
+    Acuses de lectura de protocolos.
+    - POST: el usuario autenticado registra que leyó un protocolo (idempotente)
+    - GET: ADMIN/AUDITOR ven todos; los demás solo los propios
+    """
+    serializer_class = ProtocoloAcuseSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['protocolo', 'version']
+
+    def get_queryset(self):
+        qs = ProtocoloAcuse.objects.select_related('usuario')
+        if self.request.user.rol in ('ADMIN', 'AUDITOR'):
+            return qs
+        return qs.filter(usuario=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        protocolo = request.data.get('protocolo', '').strip()
+        version = str(request.data.get('version', '1.0')).strip() or '1.0'
+        if not protocolo:
+            return Response({'protocolo': 'Indique el protocolo.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        acuse, creado = ProtocoloAcuse.objects.get_or_create(
+            usuario=request.user, protocolo=protocolo, version=version
+        )
+        if creado:
+            SystemLog.objects.create(
+                categoria='CONFIG',
+                usuario=request.user,
+                descripcion=f'Acuse de lectura de protocolo: {protocolo} v{version}',
+                ip_address=request.META.get('REMOTE_ADDR'),
+                metadata={'protocolo': protocolo, 'version': version},
+            )
+        serializer = self.get_serializer(acuse)
+        return Response(serializer.data,
+                        status=status.HTTP_201_CREATED if creado else status.HTTP_200_OK)

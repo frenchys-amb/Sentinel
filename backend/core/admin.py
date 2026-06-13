@@ -30,9 +30,9 @@ class CajaAdmin(admin.ModelAdmin):
 
 @admin.register(Medicamento)
 class MedicamentoAdmin(admin.ModelAdmin):
-    list_display = ['nombre', 'principio_activo', 'concentracion', 'tipo', 'requiere_doble_factor', 'activo']
-    list_filter = ['tipo', 'activo']
-    search_fields = ['nombre', 'principio_activo', 'codigo_barras']
+    list_display = ['nombre', 'principio_activo', 'concentracion', 'tipo', 'ndc', 'dea_schedule', 'requiere_doble_factor', 'activo']
+    list_filter = ['tipo', 'dea_schedule', 'activo']
+    search_fields = ['nombre', 'principio_activo', 'codigo_barras', 'ndc']
 
 
 @admin.register(Inventario)

@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { api } from '../services/api';
-import { AlertCircle, Pill, X } from 'lucide-react';
+import { AlertCircle, Pill, X, PenLine } from 'lucide-react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
+import { parsearGS1 } from '../utils/gs1';
+import SignatureModal from './SignatureModal';
 
 const BotonEmergencia = ({ user, onSuccess }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -10,10 +12,13 @@ const BotonEmergencia = ({ user, onSuccess }) => {
   const [selectedMed, setSelectedMed] = useState(null);
   const [cantidad, setCantidad] = useState(1);
   const [testigoId, setTestigoId] = useState('');
-  const [firma, setFirma] = useState('');
+  const [firma, setFirma] = useState(null);          // imagen de la firma (data URL)
+  const [showFirmaModal, setShowFirmaModal] = useState(false);
   const [cajaId, setCajaId] = useState('');
   const [cajas, setCajas] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
+  const [inventarios, setInventarios] = useState([]); // lotes con stock en la caja elegida
+  const [lote, setLote] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const scannerRef = useRef(null);
@@ -22,6 +27,18 @@ const BotonEmergencia = ({ user, onSuccess }) => {
     if (isOpen) fetchData();
   }, [isOpen]);
 
+  // Al elegir caja + medicamento, cargar los lotes con stock disponible
+  useEffect(() => {
+    if (!cajaId || !selectedMed) { setInventarios([]); setLote(''); return; }
+    api.get('/medicamentos/inventario/', { params: { caja: cajaId, medicamento: selectedMed.id } })
+      .then(res => {
+        const items = (res.data.results || res.data).filter(i => i.cantidad > 0);
+        setInventarios(items);
+        setLote(items.length > 0 ? items[0].lote : '');
+      })
+      .catch(() => { setInventarios([]); setLote(''); });
+  }, [cajaId, selectedMed]);
+
   useEffect(() => {
     if (step === 1 && isOpen) {
       const scanner = new Html5QrcodeScanner('qr-reader', {
@@ -29,7 +46,11 @@ const BotonEmergencia = ({ user, onSuccess }) => {
       }, false);
       scanner.render(
         (decodedText) => {
-          const med = medicamentos.find(m => m.codigo_barras === decodedText);
+          // GS1 DataMatrix (NDC embebido) o codigo de barras simple del catalogo
+          const r = parsearGS1(decodedText);
+          const med = (r.esGS1 && r.candidatosNdc.length)
+            ? medicamentos.find(m => m.ndc && r.candidatosNdc.includes(m.ndc))
+            : medicamentos.find(m => m.codigo_barras === decodedText);
           if (med) { setSelectedMed(med); scanner.clear(); setStep(2); }
         },
         () => {}
@@ -62,8 +83,9 @@ const BotonEmergencia = ({ user, onSuccess }) => {
         caja_origen: cajaId,
         medicamento: selectedMed.id,
         cantidad: parseInt(cantidad),
+        lote: lote,
         testigo: testigoId || null,
-        firma_usuario: firma || 'FIRMA_DIGITAL_' + user.id,
+        firma_usuario: 'FIRMA_DIGITAL_' + user.id,
         motivo: 'Administracion de emergencia',
         paciente_id: 'EMERGENCIA_' + Date.now(),
       });
@@ -71,13 +93,22 @@ const BotonEmergencia = ({ user, onSuccess }) => {
       if (onSuccess) onSuccess();
       // Success handled by caller — no alert()
     } catch (err) {
-      setError(err.response?.data?.error || 'Error al registrar la transaccion');
+      const data = err.response?.data;
+      if (data) {
+        const msg = typeof data === 'string'
+          ? data
+          : Object.entries(data).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' | ');
+        setError(msg);
+      } else {
+        setError('Error al registrar la transaccion');
+      }
     } finally { setLoading(false); }
   };
 
   const handleClose = () => {
     setIsOpen(false); setStep(1); setSelectedMed(null); setError('');
-    setCantidad(1); setTestigoId(''); setFirma(''); setCajaId('');
+    setCantidad(1); setTestigoId(''); setFirma(null); setShowFirmaModal(false);
+    setCajaId(''); setLote(''); setInventarios([]);
     if (scannerRef.current) scannerRef.current.clear().catch(() => {});
   };
 
@@ -183,11 +214,30 @@ const BotonEmergencia = ({ user, onSuccess }) => {
                   ))}
                 </select>
               </div>
+              {cajaId && (
+                inventarios.length > 0 ? (
+                  <div>
+                    <label className="input-label">Lote</label>
+                    <select className="input-field" value={lote} onChange={(e) => setLote(e.target.value)}>
+                      {inventarios.map((inv) => (
+                        <option key={inv.id} value={inv.lote}>
+                          {inv.lote || '(sin lote)'} — {inv.cantidad} disp.{inv.fecha_caducidad ? ` · vence ${inv.fecha_caducidad}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    Esta caja no tiene stock de {selectedMed.nombre}. Selecciona otra caja.
+                  </div>
+                )
+              )}
               <div>
                 <label className="input-label">Cantidad</label>
                 <input type="number" min="1" className="input-field" value={cantidad} onChange={(e) => setCantidad(e.target.value)} />
               </div>
-              <button onClick={() => setStep(3)} disabled={!cajaId} className="w-full btn-primary disabled:opacity-50">
+              <button onClick={() => setStep(3)} disabled={!cajaId || inventarios.length === 0} className="w-full btn-primary disabled:opacity-50">
                 Continuar
               </button>
             </div>
@@ -214,8 +264,22 @@ const BotonEmergencia = ({ user, onSuccess }) => {
               )}
 
               <div>
-                <label className="input-label">Firma Digital</label>
-                <input type="text" className="input-field" placeholder="Codigo de firma" value={firma} onChange={(e) => setFirma(e.target.value)} />
+                <label className="input-label">Firma Digital <span className="text-red-600">*</span></label>
+                {firma ? (
+                  <div className="flex items-center gap-3">
+                    <div className="border border-emerald-200 rounded-xl bg-emerald-50/50 p-1.5 flex-1">
+                      <img src={firma} alt="Firma" className="h-12 w-full object-contain" />
+                    </div>
+                    <button type="button" onClick={() => setFirma(null)}
+                      className="text-xs text-red-500 hover:text-red-700 whitespace-nowrap">Borrar</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setShowFirmaModal(true)}
+                    className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-gray-300 rounded-xl text-sm text-gray-500 hover:border-blue-400 hover:text-blue-700 transition-colors">
+                    <PenLine className="h-4 w-4" />
+                    Firmar
+                  </button>
+                )}
               </div>
 
               <div className="flex gap-3">
@@ -232,6 +296,13 @@ const BotonEmergencia = ({ user, onSuccess }) => {
           )}
         </div>
       </div>
+
+      <SignatureModal
+        isOpen={showFirmaModal}
+        title="Firma Digital"
+        onSave={(dataUrl) => { setFirma(dataUrl); setShowFirmaModal(false); }}
+        onCancel={() => setShowFirmaModal(false)}
+      />
     </div>
   );
 };

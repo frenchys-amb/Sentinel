@@ -142,11 +142,23 @@ class Medicamento(models.Model):
         ('NARCOTICO', 'Narcótico'),
     ]
 
+    DEA_SCHEDULE_CHOICES = [
+        ('II', 'Schedule II'),
+        ('III', 'Schedule III'),
+        ('IV', 'Schedule IV'),
+        ('V', 'Schedule V'),
+    ]
+
     nombre = models.CharField(max_length=200)
     principio_activo = models.CharField(max_length=200)
     concentracion = models.CharField(max_length=50)
     presentacion = models.CharField(max_length=100)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default='GENERAL')
+    ndc = models.CharField(max_length=11, unique=True, blank=True, null=True, db_index=True,
+        help_text="National Drug Code normalizado a 11 dígitos (5-4-2). "
+                  "Obligatorio para narcóticos y controlados.")
+    dea_schedule = models.CharField(max_length=5, choices=DEA_SCHEDULE_CHOICES, blank=True,
+        help_text="Clasificación DEA de sustancia controlada (II-V)")
     codigo_barras = models.CharField(max_length=100, unique=True, blank=True, null=True)
     requiere_doble_factor = models.BooleanField(default=False, 
         help_text="Narcóticos siempre requieren doble factor")
@@ -199,6 +211,7 @@ class Transaccion(models.Model):
     UPDATE y DELETE están bloqueados a nivel de base de datos (RLS).
     """
     TIPO_CHOICES = [
+        ('RECEIPT', 'Recepción/Compra'),
         ('PICKUP', 'Recolección'),
         ('TRANSFER', 'Transferencia'),
         ('RETURN', 'Devolución'),
@@ -228,6 +241,8 @@ class Transaccion(models.Model):
     medicamento = models.ForeignKey(Medicamento, on_delete=models.PROTECT, related_name='transacciones')
     cantidad = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     lote = models.CharField(max_length=50, blank=True)
+    fecha_caducidad = models.DateField(blank=True, null=True,
+        help_text="Fecha de expiración del lote — se propaga al inventario al recibir")
 
     # Contexto
     paciente_id = models.CharField(max_length=100, blank=True, help_text="ID anónimo del paciente")
@@ -252,6 +267,10 @@ class Transaccion(models.Model):
                                   help_text="ID generado en dispositivo offline")
     sincronizado = models.BooleanField(default=True)
     fecha_sincronizacion = models.DateTimeField(blank=True, null=True)
+
+    # Versión de la fórmula de hash. Las transacciones históricas (v1) se
+    # verifican con la fórmula original; v2 incluye fecha_caducidad.
+    hash_version = models.PositiveSmallIntegerField(default=2)
 
     class Meta:
         db_table = 'transacciones'
@@ -280,6 +299,12 @@ class Transaccion(models.Model):
             'timestamp': self.timestamp.isoformat(),
             'hash_anterior': self.hash_anterior,
         }
+        # v1 (transacciones históricas) no incluía fecha_caducidad — agregar
+        # el campo a su dict cambiaría el hash y rompería la verificación.
+        if self.hash_version >= 2:
+            data['fecha_caducidad'] = (
+                self.fecha_caducidad.isoformat() if self.fecha_caducidad else None
+            )
         json_str = json.dumps(data, sort_keys=True, default=str)
         return hashlib.sha256(json_str.encode()).hexdigest()
 
@@ -599,6 +624,27 @@ class TurnoConfig(models.Model):
 
     def __str__(self):
         return f"{self.nombre} ({self.hora_inicio} - {self.hora_fin})"
+
+
+class ProtocoloAcuse(models.Model):
+    """
+    Acuse de lectura de protocolos operativos.
+    Evidencia para auditorías: quién leyó cada protocolo y cuándo.
+    """
+    usuario = models.ForeignKey(Usuario, on_delete=models.PROTECT,
+                                related_name='acuses_protocolo')
+    protocolo = models.CharField(max_length=100, db_index=True,
+        help_text="Identificador del protocolo, ej. eliminacion-controlados")
+    version = models.CharField(max_length=20, default='1.0')
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'protocolo_acuses'
+        unique_together = ['usuario', 'protocolo', 'version']
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"{self.usuario.username} → {self.protocolo} v{self.version}"
 
 
 class Base(models.Model):
