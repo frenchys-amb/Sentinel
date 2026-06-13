@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { api } from '../services/api';
-import { Boxes, RefreshCw, Search, ChevronDown, ChevronUp, AlertTriangle, Clock, Package } from 'lucide-react';
+import { Boxes, RefreshCw, Search, ChevronDown, ChevronUp, Clock, Package } from 'lucide-react';
 
 const InventarioPage = ({ user }) => {
   const [inventario, setInventario] = useState([]);

@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Package, AlertTriangle, FileText, LogOut,
-  Wifi, WifiOff, ShieldCheck, ClipboardCheck, Link2, FileSearch, BookOpen, Boxes
+  Wifi, WifiOff, ShieldCheck, Link2, FileSearch, BookOpen, Boxes
 } from 'lucide-react';
 import { useOffline } from '../hooks/useOffline';
 

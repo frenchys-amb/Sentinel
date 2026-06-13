@@ -4,7 +4,6 @@ import { api, setTokens } from './services/api';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import TransaccionesPage from './pages/TransaccionesPage';
-import TurnoPage from './pages/TurnoPage';
 import AlertasPage from './pages/AlertasPage';
 import ReportesPage from './pages/ReportesPage';
 import AdminPanelPage from './pages/AdminPanelPage';
