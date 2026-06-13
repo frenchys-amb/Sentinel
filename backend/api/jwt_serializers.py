@@ -29,7 +29,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         except Usuario.DoesNotExist:
             user_check = None
 
-        if user_check and user_check.rol == 'PARAMEDICO':
+        if user_check:
             # Check permanent block
             if user_check.bloqueado_permanente:
                 raise serializers.ValidationError({
@@ -42,19 +42,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 segundos = int((user_check.bloqueado_hasta - timezone.now()).total_seconds())
                 minutos = max(1, (segundos + 59) // 60)
                 raise serializers.ValidationError({
-                    'detail': f'Cuenta bloqueada temporalmente por multiples intentos fallidos. Intente de nuevo en {minutos} minuto(s).',
+                    'detail': 'Credenciales invalidas.',
                     'code': 'ACCOUNT_LOCKED',
-                    'minutes': minutos,
-                    'attempts_left': max(0, 3 - user_check.intentos_fallidos),
                 })
 
         # Proceed with normal JWT authentication
         try:
             data = super().validate(attrs)
         except serializers.ValidationError:
-            # Authentication failed - register failed attempt for PARAMEDICO
-            if user_check and user_check.rol == 'PARAMEDICO':
-                user_check.registrar_intento_fallidos()
+            # Authentication failed - register failed attempt
+            if user_check:
+                user_check.registrar_intento_fallido()
 
                 intentos = user_check.intentos_fallidos
 
@@ -78,22 +76,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 )
                 if user_check.bloqueado_permanente:
                     raise serializers.ValidationError({
-                        'detail': 'Su cuenta ha sido bloqueada por multiples intentos fallidos. Contacte al administrador para desbloquearla.',
+                        'detail': 'Credenciales invalidas.',
                         'code': 'ACCOUNT_PERMANENTLY_LOCKED',
                     })
                 elif user_check.bloqueado_hasta:
-                    segundos = int((user_check.bloqueado_hasta - timezone.now()).total_seconds())
-                    minutos = max(1, (segundos + 59) // 60)
                     raise serializers.ValidationError({
-                        'detail': f'Credenciales invalidas. Cuenta bloqueada por {minutos} minuto(s) tras {intentos} intentos fallidos.',
+                        'detail': 'Credenciales invalidas.',
                         'code': 'ACCOUNT_LOCKED',
-                        'minutes': minutos,
-                        'attempts_left': max(0, 3 - intentos),
                     })
                 else:
-                    restantes = 3 - intentos
                     raise serializers.ValidationError({
-                        'detail': f'Credenciales invalidas. Le quedan {restantes} intento(s) antes de ser bloqueado.',
+                        'detail': 'Credenciales invalidas.',
                         'code': 'INVALID_CREDENTIALS',
                     })
             raise

@@ -7,11 +7,21 @@ import ScannerGS1 from '../components/ScannerGS1';
 import { parsearGS1 } from '../utils/gs1';
 import {
   Trash2, AlertTriangle, ArrowRightLeft,
-  RotateCcw, Pill, Camera, CheckCircle, Hash, PenLine, PackagePlus, ScanLine
+  RotateCcw, Pill, Camera, CheckCircle, Hash, PenLine, PackagePlus, ScanLine, X
 } from 'lucide-react';
 
+const tipoColors = {
+  RECEIPT: 'bg-emerald-100 text-emerald-700',
+  ADMINISTRATION: 'bg-blue-100 text-blue-700',
+  WASTE: 'bg-red-100 text-red-700',
+  TRANSFER: 'bg-amber-100 text-amber-700',
+  RETURN: 'bg-purple-100 text-purple-700',
+  DAMAGE: 'bg-orange-100 text-orange-700',
+  PICKUP: 'bg-teal-100 text-teal-700',
+};
+
 const TransaccionesPage = ({ user }) => {
-  const [activeTab, setActiveTab] = useState('ADMINISTRATION');
+  const [activeTab, setActiveTab] = useState('');
   const [medicamentos, setMedicamentos] = useState([]);
   const [cajas, setCajas] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
@@ -21,20 +31,18 @@ const TransaccionesPage = ({ user }) => {
   const [formError, setFormError] = useState('');
   const { isOnline, queueForOffline } = useOffline();
 
+  // Modal state for ADMIN recepcion
+  const [showRecepcion, setShowRecepcion] = useState(false);
+
   const [formData, setFormData] = useState({
     caja_origen: '', caja_destino: '', medicamento: '', cantidad: 1,
     lote: '', fecha_caducidad: '', testigo: '', motivo: '', ubicacion: '', paciente_id: '',
   });
   const [evidencia, setEvidencia] = useState([]);
 
-  // Escaner GS1 DataMatrix
   const [showScanner, setShowScanner] = useState(false);
   const [scanInfo, setScanInfo] = useState({ status: '', mensaje: '' });
 
-  // ADMIN: acceso al formulario de Recepcion/Compra desde el historial
-  const [adminRecepcion, setAdminRecepcion] = useState(false);
-
-  // Signatures
   const [signatureModal, setSignatureModal] = useState({ open: false, key: '', title: '' });
   const [signatures, setSignatures] = useState({
     firma_usuario: null,
@@ -69,7 +77,8 @@ const TransaccionesPage = ({ user }) => {
   };
 
   const resetForm = () => {
-    setFormData({ caja_origen: '', caja_destino: '', medicamento: '', cantidad: 1, lote: '', fecha_caducidad: '', testigo: '', motivo: '', ubicacion: '', paciente_id: '' });
+    const almacen = cajas.find(c => c.codigo === 'ALMACEN');
+    setFormData({ caja_origen: '', caja_destino: almacen ? String(almacen.id) : '', medicamento: '', cantidad: 1, lote: '', fecha_caducidad: '', testigo: '', motivo: '', ubicacion: '', paciente_id: '' });
     setEvidencia([]);
     setSignatures({ firma_usuario: null, firma_testigo: null });
     setFormError('');
@@ -77,11 +86,16 @@ const TransaccionesPage = ({ user }) => {
     setScanInfo({ status: '', mensaje: '' });
   };
 
+  const openRecepcion = () => {
+    resetForm();
+    setSuccess('');
+    setShowRecepcion(true);
+  };
+
   const handleScan = (texto) => {
     const r = parsearGS1(texto);
 
     if (!r.esGS1) {
-      // Codigo de barras simple: igualar contra codigo_barras del catalogo
       const med = medicamentos.find(m => m.codigo_barras && m.codigo_barras === r.crudo);
       if (med) {
         setFormData(prev => ({ ...prev, medicamento: String(med.id) }));
@@ -93,7 +107,6 @@ const TransaccionesPage = ({ user }) => {
       return;
     }
 
-    // GS1: buscar el medicamento por NDC (las 3 normalizaciones posibles)
     const med = r.candidatosNdc.length
       ? medicamentos.find(m => m.ndc && r.candidatosNdc.includes(m.ndc))
       : null;
@@ -144,6 +157,9 @@ const TransaccionesPage = ({ user }) => {
         fetchData();
       }
       resetForm();
+      if (user?.rol === 'ADMIN') {
+        setTimeout(() => { setShowRecepcion(false); setSuccess(''); }, 1500);
+      }
     } catch (err) {
       const data = err.response?.data;
       if (data) {
@@ -166,43 +182,111 @@ const TransaccionesPage = ({ user }) => {
   const esControlado = selectedMed?.tipo === 'NARCOTICO' || selectedMed?.tipo === 'CONTROLADO';
   const recepcionControlada = activeTab === 'RECEIPT' && esControlado;
 
-  const tipoColors = {
-    ADMINISTRATION: 'bg-blue-100 text-blue-800',
-    RECEIPT: 'bg-teal-100 text-teal-800',
-    WASTE: 'bg-red-100 text-red-800',
-    TRANSFER: 'bg-purple-100 text-purple-800',
-    RETURN: 'bg-emerald-100 text-emerald-800',
-    DAMAGE: 'bg-amber-100 text-amber-800',
-  };
-
-  // ─── Signature Preview ───
-  const SignaturePreview = ({ sigKey, label, required }) => {
-    const sig = signatures[sigKey];
-    return (
-      <div>
-        <label className="input-label">{label} {required && '*'}</label>
-        {sig ? (
-          <div className="flex items-center gap-3">
-            <div className="border border-emerald-200 rounded-xl bg-emerald-50/50 p-1.5 flex-1">
-              <img src={sig} alt="Firma" className="h-12 w-full object-contain" />
-            </div>
-            <button type="button" onClick={() => setSignatures(prev => ({ ...prev, [sigKey]: null }))}
-              className="text-xs text-red-500 hover:text-red-700 whitespace-nowrap">Borrar</button>
+  const SignaturePreview = ({ sigKey, label, required }) => (
+    <div>
+      <label className="input-label">{label} {required && <span className="text-red-600">*</span>}</label>
+      {signatures[sigKey] ? (
+        <div className="flex items-center gap-3">
+          <div className="border border-emerald-200 rounded-xl bg-emerald-50/50 p-1.5 flex-1">
+            <img src={signatures[sigKey]} alt={label} className="h-12 w-full object-contain" />
           </div>
-        ) : (
-          <button type="button"
-            onClick={() => setSignatureModal({ open: true, key: sigKey, title: label })}
-            className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-gray-300 rounded-xl text-sm text-gray-500 hover:border-blue-400 hover:text-blue-700 transition-colors">
-            <PenLine className="h-4 w-4" />
-            Firmar
-          </button>
-        )}
-      </div>
-    );
-  };
+          <button type="button" onClick={() => setSignatures(prev => ({ ...prev, [sigKey]: null }))}
+            className="text-xs text-red-500 hover:text-red-700 whitespace-nowrap">Borrar</button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setSignatureModal({ open: true, key: sigKey, title: label })}
+          className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-gray-300 rounded-xl text-sm text-gray-500 hover:border-blue-400 hover:text-blue-700 transition-colors">
+          <PenLine className="h-4 w-4" />
+          Firmar
+        </button>
+      )}
+    </div>
+  );
 
-  // ─── ADMIN: historial + acceso a Recepcion/Compra ───
-  if (user?.rol === 'ADMIN' && !adminRecepcion) {
+  // ─── Recepcion Form (shared between ADMIN modal and PARAMEDICO inline) ───
+  const recepcionFormContent = (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="input-label mb-0">Medicamento *</label>
+          <button type="button" onClick={() => { setShowScanner(!showScanner); setScanInfo({ status: '', mensaje: '' }); }}
+            className="flex items-center gap-1.5 text-xs font-medium text-blue-900 hover:text-blue-700 transition-colors">
+            <ScanLine className="h-3.5 w-3.5" />
+            {showScanner ? 'Cerrar escaner' : 'Escanear empaque'}
+          </button>
+        </div>
+        <select className="input-field" value={formData.medicamento} onChange={(e) => setFormData({...formData, medicamento: e.target.value})} required>
+          <option value="">Seleccionar...</option>
+          {medicamentos.map((med) => (
+            <option key={med.id} value={med.id}>{med.nombre} {med.concentracion} ({med.tipo})</option>
+          ))}
+        </select>
+      </div>
+
+      {showScanner && (
+        <ScannerGS1 onScan={handleScan} onClose={() => setShowScanner(false)} />
+      )}
+
+      {scanInfo.mensaje && (
+        <div className={`p-3 rounded-xl border text-sm ${scanInfo.status === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+          {scanInfo.mensaje}
+        </div>
+      )}
+
+      {selectedMed && (
+        <div className={`p-3 rounded-xl border text-sm ${selectedMed.ndc ? 'bg-teal-50 border-teal-200 text-teal-800' : esControlado ? 'bg-red-50 border-red-200 text-red-700' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+          {selectedMed.ndc
+            ? <>NDC: <span className="font-mono font-semibold">{selectedMed.ndc_formateado || selectedMed.ndc}</span>{selectedMed.dea_schedule && ` · Schedule ${selectedMed.dea_schedule}`}</>
+            : esControlado
+              ? 'Este medicamento no tiene NDC registrado. Un administrador debe agregarlo en el catalogo antes de poder recibirlo.'
+              : 'Sin NDC registrado (no requerido para medicamentos generales).'}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="input-label">Cantidad *</label>
+          <input type="number" min="1" className="input-field" value={formData.cantidad} onChange={(e) => setFormData({...formData, cantidad: e.target.value})} required />
+        </div>
+        <div>
+          <label className="input-label">Lote {recepcionControlada && <span className="text-red-600">*</span>}</label>
+          <input type="text" className="input-field" value={formData.lote} onChange={(e) => setFormData({...formData, lote: e.target.value})} required={recepcionControlada} placeholder="Como aparece en el empaque" />
+        </div>
+      </div>
+
+      <div>
+        <label className="input-label">Fecha de expiracion {recepcionControlada && <span className="text-red-600">*</span>}</label>
+        <input type="date" className="input-field" value={formData.fecha_caducidad} onChange={(e) => setFormData({...formData, fecha_caducidad: e.target.value})} required={recepcionControlada} min={new Date(Date.now() + 86400000).toISOString().split('T')[0]} />
+        {recepcionControlada && <p className="text-xs text-amber-600 mt-1.5">NDC + lote + fecha de expiracion son obligatorios al recibir narcoticos y controlados.</p>}
+      </div>
+
+      <div>
+        <label className="input-label">Caja Destino *</label>
+        <select className="input-field" value={formData.caja_destino} onChange={(e) => setFormData({...formData, caja_destino: e.target.value})} required>
+          <option value="">Seleccionar...</option>
+          {cajas.filter(c => c.codigo === 'ALMACEN').map((c) => <option key={c.id} value={c.id}>ALMACÉN - Bodega (stock central)</option>)}
+          {cajas.filter(c => c.codigo !== 'ALMACEN').map((c) => <option key={c.id} value={c.id}>{c.codigo} - {c.nombre}</option>)}
+        </select>
+        <p className="text-xs text-gray-500 mt-1">La compra entra al almacén. Usa Transferencia para cargar a ambulancia.</p>
+      </div>
+
+      <div>
+        <label className="input-label">Motivo / Descripcion</label>
+        <textarea className="input-field" rows="2" value={formData.motivo} onChange={(e) => setFormData({...formData, motivo: e.target.value})} placeholder="Motivo de la recepcion..." />
+      </div>
+
+      <SignaturePreview sigKey="firma_usuario" label="Firma Digital" required />
+
+      <button type="submit"
+        disabled={loading || !signatures.firma_usuario || (recepcionControlada && !selectedMed?.ndc)}
+        className="w-full btn-primary disabled:opacity-40 py-3">
+        {loading ? 'Registrando...' : isOnline ? 'Registrar Recepcion' : 'Guardar Localmente'}
+      </button>
+    </form>
+  );
+
+  // ─── ADMIN: historial con modal de recepcion ───
+  if (user?.rol === 'ADMIN') {
     return (
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -210,13 +294,18 @@ const TransaccionesPage = ({ user }) => {
             <h1 className="text-2xl font-bold text-gray-900">Historial de Transacciones</h1>
             <p className="text-gray-500 mt-1">Registro completo de movimientos de medicamentos</p>
           </div>
-          <button
-            onClick={() => { setAdminRecepcion(true); setActiveTab('RECEIPT'); resetForm(); }}
+          <button onClick={openRecepcion}
             className="btn-primary flex items-center gap-2 text-sm">
             <PackagePlus className="h-4 w-4" />
             Registrar Recepcion/Compra
           </button>
         </div>
+
+        {success && (
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm">
+            <CheckCircle className="h-4 w-4" />{success}
+          </div>
+        )}
 
         {/* Filter tabs */}
         <div className="flex flex-wrap gap-2">
@@ -275,30 +364,64 @@ const TransaccionesPage = ({ user }) => {
             </table>
           </div>
         </div>
+
+        {/* ─── Modal Recepcion/Compra ─── */}
+        {showRecepcion && (
+          <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowRecepcion(false); }}>
+            <div className="modal-content w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 bg-white z-10 flex items-center justify-between p-5 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <PackagePlus className="h-5 w-5 text-blue-900" />
+                  <h3 className="text-lg font-semibold text-gray-900">Recepcion / Compra</h3>
+                </div>
+                <button onClick={() => setShowRecepcion(false)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="p-5">
+                {formError && (
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm mb-4">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />{formError}
+                  </div>
+                )}
+                {success && (
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm mb-4">
+                    <CheckCircle className="h-4 w-4" />{success}
+                  </div>
+                )}
+                {recepcionFormContent}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <SignatureModal
+          isOpen={signatureModal.open}
+          title={signatureModal.title || 'Firma Digital'}
+          onSave={(dataUrl) => {
+            setSignatures(prev => ({ ...prev, [signatureModal.key]: dataUrl }));
+            setSignatureModal({ open: false, key: '', title: '' });
+          }}
+          onCancel={() => setSignatureModal({ open: false, key: '', title: '' })}
+        />
       </div>
     );
   }
 
-  // ─── PARAMEDICO: formulario completo + historial (ADMIN: solo Recepcion/Compra) ───
-  const tabsVisibles = user?.rol === 'ADMIN' ? tabs.filter(t => t.id === 'RECEIPT') : tabs;
-
+  // ─── PARAMEDICO: formulario completo + historial ───
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">{user?.rol === 'ADMIN' ? 'Recepcion / Compra' : 'Transacciones'}</h1>
-          <p className="text-gray-500 mt-1">{user?.rol === 'ADMIN' ? 'Registro de entrada de medicamentos comprados' : 'Registro de movimientos de medicamentos'}</p>
+          <h1 className="text-2xl font-bold text-gray-900">Transacciones</h1>
+          <p className="text-gray-500 mt-1">Registro de movimientos de medicamentos</p>
         </div>
-        {user?.rol === 'ADMIN' && (
-          <button onClick={() => { setAdminRecepcion(false); setActiveTab(''); resetForm(); }} className="btn-secondary text-sm">
-            ← Volver al historial
-          </button>
-        )}
       </div>
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">
-        {tabsVisibles.map((tab) => {
+        {tabs.map((tab) => {
           const Icon = tab.icon;
           return (
             <button key={tab.id} onClick={() => { setActiveTab(tab.id); resetForm(); }}
@@ -342,28 +465,20 @@ const TransaccionesPage = ({ user }) => {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {user?.rol === 'PARAMEDICO' && (
-              <div>
-                <label className="input-label">Responsable</label>
-                <input type="text" className="input-field bg-gray-100" value={`${user.first_name} ${user.last_name}`} disabled />
-              </div>
-            )}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="input-label mb-0">Medicamento *</label>
-                <button type="button" onClick={() => { setShowScanner(!showScanner); setScanInfo({ status: '', mensaje: '' }); }}
-                  className="flex items-center gap-1.5 text-xs font-medium text-blue-900 hover:text-blue-700 transition-colors">
-                  <ScanLine className="h-3.5 w-3.5" />
-                  {showScanner ? 'Cerrar escaner' : 'Escanear empaque'}
-                </button>
-              </div>
-              <select className="input-field" value={formData.medicamento} onChange={(e) => setFormData({...formData, medicamento: e.target.value})} required>
-                <option value="">Seleccionar...</option>
-                {medicamentos.map((med) => (
-                  <option key={med.id} value={med.id}>{med.nombre} {med.concentracion} ({med.tipo})</option>
-                ))}
-              </select>
+            <div className="flex items-center justify-between mb-1">
+              <label className="input-label mb-0">Medicamento *</label>
+              <button type="button" onClick={() => { setShowScanner(!showScanner); setScanInfo({ status: '', mensaje: '' }); }}
+                className="flex items-center gap-1.5 text-xs font-medium text-blue-900 hover:text-blue-700 transition-colors">
+                <ScanLine className="h-3.5 w-3.5" />
+                {showScanner ? 'Cerrar escaner' : 'Escanear empaque'}
+              </button>
             </div>
+            <select className="input-field" value={formData.medicamento} onChange={(e) => setFormData({...formData, medicamento: e.target.value})} required>
+              <option value="">Seleccionar...</option>
+              {medicamentos.map((med) => (
+                <option key={med.id} value={med.id}>{med.nombre} {med.concentracion} ({med.tipo})</option>
+              ))}
+            </select>
 
             {showScanner && (
               <ScannerGS1 onScan={handleScan} onClose={() => setShowScanner(false)} />
@@ -409,8 +524,10 @@ const TransaccionesPage = ({ user }) => {
                 <label className="input-label">Caja Origen *</label>
                 <select className="input-field" value={formData.caja_origen} onChange={(e) => setFormData({...formData, caja_origen: e.target.value})} required>
                   <option value="">Seleccionar...</option>
-                  {cajas.map((c) => <option key={c.id} value={c.id}>{c.codigo} - {c.nombre}</option>)}
+                  {cajas.filter(c => c.codigo === 'ALMACEN').map((c) => <option key={c.id} value={c.id}>ALMACÉN - Bodega</option>)}
+                  {cajas.filter(c => c.codigo !== 'ALMACEN').map((c) => <option key={c.id} value={c.id}>{c.codigo} - {c.nombre}</option>)}
                 </select>
+                {activeTab === 'TRANSFER' && <p className="text-xs text-gray-500 mt-1">Origen: de donde sale el medicamento</p>}
               </div>
             )}
 
@@ -419,8 +536,11 @@ const TransaccionesPage = ({ user }) => {
                 <label className="input-label">Caja Destino *</label>
                 <select className="input-field" value={formData.caja_destino} onChange={(e) => setFormData({...formData, caja_destino: e.target.value})} required>
                   <option value="">Seleccionar...</option>
-                  {cajas.map((c) => <option key={c.id} value={c.id}>{c.codigo} - {c.nombre}</option>)}
+                  {activeTab === 'RECEIPT' && cajas.filter(c => c.codigo === 'ALMACEN').map((c) => <option key={c.id} value={c.id}>ALMACÉN - Bodega (stock central)</option>)}
+                  {cajas.filter(c => c.codigo !== 'ALMACEN').map((c) => <option key={c.id} value={c.id}>{c.codigo} - {c.nombre}</option>)}
                 </select>
+                {activeTab === 'RECEIPT' && <p className="text-xs text-gray-500 mt-1">La compra entra al almacén. Usa Transferencia para cargar a ambulancia.</p>}
+                {activeTab === 'TRANSFER' && <p className="text-xs text-gray-500 mt-1">Destino: a donde llega el medicamento</p>}
               </div>
             )}
 
@@ -457,8 +577,6 @@ const TransaccionesPage = ({ user }) => {
                   </select>
                   {activeTab === 'WASTE' && <p className="text-xs text-amber-600 mt-1.5">Sin testigo, no hay descarte.</p>}
                 </div>
-
-                {/* Firma del testigo */}
                 <SignaturePreview sigKey="firma_testigo" label="Firma del Testigo" />
               </div>
             )}
@@ -475,7 +593,6 @@ const TransaccionesPage = ({ user }) => {
               </div>
             )}
 
-            {/* Firma del usuario — siempre visible */}
             <SignaturePreview sigKey="firma_usuario" label="Firma Digital" required />
 
             <button type="submit"
@@ -517,7 +634,6 @@ const TransaccionesPage = ({ user }) => {
         </div>
       </div>
 
-      {/* Signature Modal */}
       <SignatureModal
         isOpen={signatureModal.open}
         title={signatureModal.title || 'Firma Digital'}

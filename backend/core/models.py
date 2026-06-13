@@ -77,22 +77,30 @@ class Usuario(AbstractUser):
 
     def registrar_intento_fallido(self):
         """
-        Registra un intento fallido de login para usuarios PARAMEDICO.
+        Registra un intento fallido de login para todos los roles.
         - 3 intentos fallidos -> bloqueo temporal de 1 minuto
         - 3 intentos mas (6 total) -> bloqueo permanente
+        Usa F() expressions para evitar race conditions.
         """
-        if self.rol != 'PARAMEDICO':
-            return
+        from django.db.models import F
+        from django.db import transaction as db_transaction
 
-        self.intentos_fallidos += 1
+        with db_transaction.atomic():
+            # Lock the row to prevent race conditions
+            user = Usuario.objects.select_for_update().get(pk=self.pk)
+            user.intentos_fallidos += 1
 
-        if self.intentos_fallidos >= 6:
-            self.bloqueado_permanente = True
-            self.bloqueado_hasta = None
-        elif self.intentos_fallidos >= 3:
-            self.bloqueado_hasta = timezone.now() + timedelta(minutes=1)
+            if user.intentos_fallidos >= 6:
+                user.bloqueado_permanente = True
+                user.bloqueado_hasta = None
+            elif user.intentos_fallidos >= 3:
+                user.bloqueado_hasta = timezone.now() + timedelta(minutes=1)
 
-        self.save(update_fields=['intentos_fallidos', 'bloqueado_hasta', 'bloqueado_permanente'])
+            user.save(update_fields=['intentos_fallidos', 'bloqueado_hasta', 'bloqueado_permanente'])
+            # Update in-memory state
+            self.intentos_fallidos = user.intentos_fallidos
+            self.bloqueado_hasta = user.bloqueado_hasta
+            self.bloqueado_permanente = user.bloqueado_permanente
 
     def limpiar_intentos_fallidos(self):
         """Limpia el contador de intentos fallidos tras login exitoso"""
@@ -309,13 +317,14 @@ class Transaccion(models.Model):
         return hashlib.sha256(json_str.encode()).hexdigest()
 
     def save(self, *args, **kwargs):
-        # Set timestamp explicitly so it's available for hash before DB save
-        if not self.timestamp:
-            self.timestamp = timezone.now()
+        from django.db import transaction
+        # Always force server timestamp — prevents client backdating
+        self.timestamp = timezone.now()
         if not self.hash_transaccion:
             # Get the hash of the most recent transaction for chaining
-            if not self.hash_anterior or self.hash_anterior == 'GENESIS':
-                ultima = Transaccion.objects.order_by('-id').values_list('hash_transaccion', flat=True).first()
+            # select_for_update prevents race conditions in concurrent requests
+            with transaction.atomic():
+                ultima = Transaccion.objects.select_for_update().order_by('-id').values_list('hash_transaccion', flat=True).first()
                 self.hash_anterior = ultima or 'GENESIS'
             self.hash_transaccion = self.generar_hash()
         super().save(*args, **kwargs)

@@ -11,6 +11,7 @@ import AdminPanelPage from './pages/AdminPanelPage';
 import CustodiaPage from './pages/CustodiaPage';
 import IncidentesPage from './pages/IncidentesPage';
 import ProtocolosPage from './pages/ProtocolosPage';
+import InventarioPage from './pages/InventarioPage';
 import Navbar from './components/Navbar';
 import ErrorBoundary from './components/ErrorBoundary';
 import InactivityTimeout from './components/InactivityTimeout';
@@ -87,6 +88,7 @@ function App() {
                 <Route path="/incidentes" element={<IncidentesPage user={user} />} />
                 <Route path="/reportes" element={<ReportesPage user={user} />} />
                 <Route path="/protocolos" element={<ProtocolosPage user={user} />} />
+                <Route path="/inventario" element={<InventarioPage user={user} />} />
                 <Route path="/admin-panel" element={user.rol === 'ADMIN' ? <AdminPanelPage user={user} /> : <Navigate to="/" />} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>

@@ -174,7 +174,8 @@ class TransaccionSerializer(serializers.ModelSerializer):
                   'motivo', 'ubicacion',
                   'evidencia_urls', 'firma_usuario', 'firma_testigo', 'timestamp',
                   'ip_address', 'offline_id', 'sincronizado']
-        read_only_fields = ['hash_transaccion', 'hash_anterior', 'timestamp', 'ip_address', 'usuario']
+        read_only_fields = ['hash_transaccion', 'hash_anterior', 'timestamp', 'ip_address', 'usuario',
+                           'firma_usuario', 'firma_testigo', 'offline_id', 'sincronizado']
 
     def validate(self, data):
         """Validaciones de negocio"""

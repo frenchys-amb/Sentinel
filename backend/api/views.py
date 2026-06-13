@@ -80,6 +80,12 @@ class IsSystemAdmin(BasePermission):
         return request.user and request.user.is_authenticated and request.user.rol == 'ADMIN'
 
 
+class IsAdminOrAuditor(BasePermission):
+    """Permiso para ADMIN y AUDITOR"""
+    def has_permission(self, request, view):
+        return request.user and request.user.is_authenticated and request.user.rol in ('ADMIN', 'AUDITOR')
+
+
 
 class TransaccionViewSet(
     mixins.CreateModelMixin,
@@ -92,7 +98,9 @@ class TransaccionViewSet(
     Solo permite crear (POST) y consultar (GET).
     UPDATE y DELETE están bloqueados por diseño.
     """
-    queryset = Transaccion.objects.all()
+    queryset = Transaccion.objects.select_related(
+        'usuario', 'testigo', 'medicamento', 'caja_origen', 'caja_destino'
+    ).all()
     serializer_class = TransaccionSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'head', 'options']
@@ -245,8 +253,10 @@ class TransaccionViewSet(
 
     @action(detail=False, methods=['post'])
     def sincronizar_offline(self, request):
-        """Sincroniza transacciones creadas offline"""
+        """Sincroniza transacciones creadas offline (max 50 por request)"""
         transacciones = request.data.get('transacciones', [])
+        if len(transacciones) > 50:
+            return Response({'error': 'Maximo 50 transacciones por sincronizacion'}, status=400)
         creadas = []
         errores = []
 
@@ -478,7 +488,7 @@ class IncidenteViewSet(viewsets.ModelViewSet):
 
 class InventarioViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet de inventario (solo lectura para paramédicos)"""
-    queryset = Inventario.objects.all()
+    queryset = Inventario.objects.select_related('medicamento', 'caja').all()
     serializer_class = InventarioSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
@@ -585,6 +595,12 @@ class DashboardViewSet(viewsets.ViewSet):
 class ReporteViewSet(viewsets.ViewSet):
     """Generación de reportes para auditorías DEA/EMS y cumplimiento"""
     permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        """DEA reports restricted to ADMIN/AUDITOR only"""
+        if self.action in ['dea_pdf', 'csv_transacciones']:
+            return [IsAuthenticated(), IsAdminOrAuditor()]
+        return [IsAuthenticated()]
 
     def _filtrar_transacciones(self, request, solo_narcoticos=False):
         qs = Transaccion.objects.select_related(
@@ -955,6 +971,13 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), IsSystemAdmin()]
         return [IsAuthenticated()]
 
+    def get_queryset(self):
+        """PARAMEDICO only sees own data; ADMIN/AUDITOR see all"""
+        user = self.request.user
+        if user.rol == 'PARAMEDICO':
+            return Usuario.objects.filter(id=user.id)
+        return Usuario.objects.all()
+
     @action(detail=False, methods=['get'])
     def me(self, request):
         """Retorna datos del usuario autenticado"""
@@ -1149,6 +1172,7 @@ class CajaViewSet(viewsets.ModelViewSet):
         instance.delete()
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def checkout(self, request, pk=None):
         """Registrar checkout de caja con conteo físico"""
         caja = self.get_object()
@@ -1220,6 +1244,7 @@ class CajaViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def checkin(self, request, pk=None):
         """Registrar checkin de caja con conteo físico"""
         caja = self.get_object()
