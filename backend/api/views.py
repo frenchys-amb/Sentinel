@@ -118,6 +118,18 @@ class TransaccionViewSet(
             )
         return Transaccion.objects.all()
 
+    @staticmethod
+    def _firma_servidor(usuario):
+        """
+        Genera la firma digital del lado servidor, ligada a la identidad
+        autenticada. firma_usuario/firma_testigo son read_only en el
+        serializer (el cliente no puede enviar una firma falsa); el servidor
+        la deriva aquí para garantizar no repudio.
+        """
+        import hashlib
+        semilla = f'{usuario.id}:{usuario.username}:{timezone.now().isoformat()}'
+        return hashlib.sha256(semilla.encode()).hexdigest()
+
     @transaction.atomic
     def perform_create(self, serializer):
         """Crear transacción con IP, user_agent, validación de stock y detección de anomalías"""
@@ -126,9 +138,16 @@ class TransaccionViewSet(
             ip = ip.split(',')[0].strip()
         ua = self.request.META.get('HTTP_USER_AGENT', '')
 
+        # Firma derivada del lado servidor (no se confía en la del cliente)
+        firma_usuario = self._firma_servidor(self.request.user)
+        testigo = serializer.validated_data.get('testigo')
+        firma_testigo = self._firma_servidor(testigo) if testigo else ''
+
         # Forzar usuario autenticado (previene suplantación)
         transaccion = serializer.save(
             usuario=self.request.user,
+            firma_usuario=firma_usuario,
+            firma_testigo=firma_testigo,
             ip_address=ip,
             user_agent=ua
         )

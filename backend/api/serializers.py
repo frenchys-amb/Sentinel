@@ -229,11 +229,9 @@ class TransaccionSerializer(serializers.ModelSerializer):
                         {'fecha_caducidad': 'No se puede recibir medicamento vencido o que vence hoy.'}
                     )
 
-        # Validar firma
-        if not data.get('firma_usuario'):
-            raise serializers.ValidationError(
-                {'firma_usuario': 'Firma digital requerida.'}
-            )
+        # La firma digital (firma_usuario/firma_testigo) es read_only y la
+        # genera el servidor en perform_create a partir de la identidad
+        # autenticada — no se valida desde la entrada del cliente.
 
         return data
 
