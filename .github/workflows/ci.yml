@@ -26,6 +26,10 @@ jobs:
           --health-retries 5
 
     env:
+      # CI=true hace que las pruebas corran contra PostgreSQL (mismo motor que
+      # producción) en vez de SQLite — ejercita triggers de inmutabilidad y
+      # SELECT FOR UPDATE. GitHub Actions ya lo define; explícito por claridad.
+      CI: 'true'
       DATABASE_URL: postgresql://postgres:testpass@localhost:5432/test_db
       SECRET_KEY: ci-test-secret-key-not-for-production
       DEBUG: 'True'

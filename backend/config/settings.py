@@ -85,9 +85,13 @@ if 'OPTIONS' not in DATABASES['default']:
     DATABASES['default']['OPTIONS'] = {}
 DATABASES['default']['OPTIONS']['options'] = '-c row_security=on'
 
-# Use SQLite for tests (avoids Supabase connection issues)
+# Base de datos para pruebas:
+# - En CI (GitHub Actions define CI=true) se prueba contra el MISMO motor que
+#   producción (PostgreSQL, vía DATABASE_URL) para ejercitar los triggers de
+#   inmutabilidad y SELECT FOR UPDATE.
+# - En desarrollo local, SQLite en memoria: rápido y NUNCA toca Supabase.
 import sys
-if 'test' in sys.argv:
+if 'test' in sys.argv and not os.getenv('CI'):
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',

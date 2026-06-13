@@ -4,6 +4,7 @@ Uses threading to simulate race conditions.
 NOTE: These tests require PostgreSQL (SQLite doesn't support SELECT FOR UPDATE).
 """
 import threading
+from django.db import connection
 from django.test import TransactionTestCase, skipUnlessDBFeature
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -81,6 +82,10 @@ class ConcurrencyTests(TransactionTestCase):
             except Exception as e:
                 errors.append(str(e))
                 results['fail'] += 1
+            finally:
+                # Cerrar la conexión del hilo para no dejar sesiones abiertas
+                # que bloqueen el DROP DATABASE en el teardown.
+                connection.close()
 
         t1 = threading.Thread(target=dispense, args=(self.user1,))
         t2 = threading.Thread(target=dispense, args=(self.user2,))
@@ -103,20 +108,23 @@ class ConcurrencyTests(TransactionTestCase):
         results = {'success': 0, 'fail': 0}
 
         def dispense(user):
-            client = self._get_client(user)
-            res = client.post('/api/transacciones/', {
-                'tipo': 'ADMINISTRATION',
-                'caja_origen': self.caja.id,
-                'medicamento': self.med.id,
-                'cantidad': 7,
-                'lote': 'CONC-LOT',
-                'firma_usuario': f'FIRMA_{user.username}',
-                'paciente_id': f'PAT_{user.username}',
-            })
-            if res.status_code == 201:
-                results['success'] += 1
-            else:
-                results['fail'] += 1
+            try:
+                client = self._get_client(user)
+                res = client.post('/api/transacciones/', {
+                    'tipo': 'ADMINISTRATION',
+                    'caja_origen': self.caja.id,
+                    'medicamento': self.med.id,
+                    'cantidad': 7,
+                    'lote': 'CONC-LOT',
+                    'firma_usuario': f'FIRMA_{user.username}',
+                    'paciente_id': f'PAT_{user.username}',
+                })
+                if res.status_code == 201:
+                    results['success'] += 1
+                else:
+                    results['fail'] += 1
+            finally:
+                connection.close()
 
         t1 = threading.Thread(target=dispense, args=(self.user1,))
         t2 = threading.Thread(target=dispense, args=(self.user2,))
