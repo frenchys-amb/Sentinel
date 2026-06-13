@@ -17,7 +17,7 @@ const LoginPage = ({ onLogin }) => {
 
     try {
       // JWT login — returns { access, refresh, user }
-      const loginRes = await api.post('/auth/login/', { username, password });
+      const loginRes = await api.post('/auth/login/', { username: username.trim(), password });
       const { access, refresh, user } = loginRes.data;
 
       onLogin(access, refresh, user);
@@ -92,6 +92,9 @@ const LoginPage = ({ onLogin }) => {
                 onChange={(e) => setUsername(e.target.value)}
                 required
                 autoFocus
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder="Ingrese su usuario"
               />
             </div>
